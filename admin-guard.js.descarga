@@ -1,0 +1,282 @@
+/**
+ * T9 OS Client Guard & Cloud Presence Agent
+ * Include in t9os.html, class.html, or game pages:
+ * <script src="firebase-config.js"></script>
+ * <script src="admin-guard.js"></script>
+ */
+
+(function() {
+  'use strict';
+
+  // Ensure Orbitron font is loaded to match T9 OS HUD aesthetic
+  if (!document.querySelector('link[href*="Orbitron"]')) {
+    const fontLink = document.createElement('link');
+    fontLink.rel = 'stylesheet';
+    fontLink.href = 'https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap';
+    document.head.appendChild(fontLink);
+  }
+
+  // 1. Persistent Visitor Token & Session ID
+  function getOrCreateVisitorToken() {
+    let token = localStorage.getItem('t9_visitor_token');
+    if (!token) {
+      token = 't9v_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36).substring(4);
+      localStorage.setItem('t9_visitor_token', token);
+    }
+    return token;
+  }
+
+  function getOrCreateSessionId() {
+    let sid = sessionStorage.getItem('t9_session_id');
+    if (!sid) {
+      sid = 'sess_' + Math.random().toString(36).substring(2, 8);
+      sessionStorage.setItem('t9_session_id', sid);
+    }
+    return sid;
+  }
+
+  const visitorToken = getOrCreateVisitorToken();
+  const sessionId = getOrCreateSessionId();
+
+  // 2. Secret Hotkey to open Admin Panel (Ctrl + Shift + A)
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+      e.preventDefault();
+      const adminUrl = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) + 'admin.html';
+      window.open(adminUrl, '_blank');
+    }
+  });
+
+  // 3. UI: Block Screen / Lockdown Overlay
+  function showBlockScreen(title, message, code) {
+    if (document.getElementById('t9-lockdown-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 't9-lockdown-overlay';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: #0f1117;
+      color: #e2e8f0;
+      z-index: 2147483647;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      padding: 24px;
+      box-sizing: border-box;
+    `;
+
+    overlay.innerHTML = `
+      <div style="max-width: 540px; background: #1a1f2c; border: 1px solid #334155; border-radius: 14px; padding: 36px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75);">
+        <div style="width: 60px; height: 60px; margin: 0 auto 18px; background: rgba(239, 68, 68, 0.12); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+          </svg>
+        </div>
+        <h1 style="font-size: 24px; font-weight: 700; color: #f87171; margin-bottom: 12px; letter-spacing: -0.5px;">${escapeHtml(title || 'Access Restricted')}</h1>
+        <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; margin-bottom: 20px;">${escapeHtml(message || 'This application or session is currently restricted by the administrator.')}</p>
+        <div style="background: #0f172a; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e293b; font-size: 12px; color: #64748b; font-family: monospace;">
+          Code: ${escapeHtml(code || 'RESTRICTED_ACCESS_POLICY')} &bull; ID: ${visitorToken.substring(0, 10)}...
+        </div>
+      </div>
+    `;
+
+    document.documentElement.appendChild(overlay);
+  }
+
+  function removeBlockScreen() {
+    const overlay = document.getElementById('t9-lockdown-overlay');
+    if (overlay) overlay.remove();
+  }
+
+  // 4. UI: T9 HUD-Style Announcement Pill (Matches the FPS counter aesthetic)
+  function showAnnouncement(message) {
+    const existing = document.getElementById('t9-announcement-wrapper');
+    if (existing) existing.remove();
+
+    const wrapper = document.createElement('div');
+    wrapper.id = 't9-announcement-wrapper';
+    wrapper.style.cssText = `
+      position: fixed;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483640;
+      pointer-events: none;
+    `;
+
+    const banner = document.createElement('div');
+    banner.style.cssText = `
+      pointer-events: auto;
+      background: linear-gradient(160deg, rgba(15, 15, 15, 0.75), rgba(10, 10, 10, 0.75));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 50px;
+      backdrop-filter: blur(8px) saturate(140%);
+      -webkit-backdrop-filter: blur(8px) saturate(140%);
+      box-shadow: 0 12px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.12) inset;
+      padding: 9px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: t9HudSlide 0.3s cubic-bezier(.22,1,.36,1);
+      max-width: 90vw;
+    `;
+
+    banner.innerHTML = `
+      <span style="font-family: 'Orbitron', sans-serif; font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 1px;">HT:</span>
+      <span style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #fff; font-size: 13.5px; font-weight: 500; letter-spacing: 0.2px;">${escapeHtml(message)}</span>
+      <button id="t9-banner-close-btn" style="background: none; border: none; color: rgba(255,255,255,0.4); font-size: 17px; cursor: pointer; padding: 0 4px; line-height: 1; margin-left: 4px; transition: color 0.15s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='rgba(255,255,255,0.4)'">&times;</button>
+    `;
+
+    wrapper.appendChild(banner);
+    document.documentElement.appendChild(wrapper);
+
+    // Close button click handler
+    document.getElementById('t9-banner-close-btn').onclick = () => {
+      wrapper.remove();
+    };
+
+    // Auto dismiss after 8 seconds with smooth fade
+    setTimeout(() => {
+      if (wrapper.parentNode) {
+        banner.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
+        banner.style.opacity = '0';
+        banner.style.transform = 'translateY(-10px)';
+        setTimeout(() => wrapper.remove(), 350);
+      }
+    }, 8000);
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text || '';
+    return div.innerHTML;
+  }
+
+  // 5. Status Check (Banned or Lockdown)
+  function checkStatus() {
+    const bannedTokens = JSON.parse(localStorage.getItem('t9_banned_tokens') || '[]');
+    if (bannedTokens.includes(visitorToken)) {
+      showBlockScreen(
+        'Access Denied',
+        'Your device has been restricted by the administrator.',
+        'ERR_DEVICE_TOKEN_BANNED'
+      );
+      return true;
+    }
+
+    const isLockdown = localStorage.getItem('t9_lockdown_active') === 'true';
+    if (isLockdown) {
+      const cfg = window.T9_ADMIN_CONFIG?.presets || {};
+      showBlockScreen(
+        cfg.schoolBlockTitle || 'Access Restricted',
+        cfg.schoolBlockMessage || 'This web application is currently restricted by the administrator.',
+        cfg.schoolBlockCode || 'ERR_SYSTEM_LOCKDOWN'
+      );
+      return true;
+    }
+
+    removeBlockScreen();
+    return false;
+  }
+
+  // 6. Presence Reporting (Cloud Heartbeat)
+  function sendHeartbeat() {
+    if (checkStatus()) return;
+
+    const sessionData = {
+      sessionId: sessionId,
+      token: visitorToken,
+      title: document.title || 'T9 OS',
+      url: window.location.pathname.split('/').pop() || 'index.html',
+      lastSeen: Date.now()
+    };
+
+    if (window.t9AdminHub) {
+      window.t9AdminHub.broadcast('presence', sessionData);
+    }
+  }
+
+  window.addEventListener('beforeunload', () => {
+    if (window.t9AdminHub) {
+      window.t9AdminHub.broadcast('leave', { sessionId: sessionId, token: visitorToken });
+    }
+  });
+
+  // 7. Command Listener
+  function setupCommandListeners() {
+    if (!window.t9AdminHub) return;
+
+    window.t9AdminHub.on('announcement', (data) => {
+      if (data && data.message) {
+        showAnnouncement(data.message);
+      }
+    });
+
+    window.t9AdminHub.on('kick', (data) => {
+      if (!data) return;
+      if (data.sessionId === sessionId || data.token === visitorToken || data.all) {
+        showBlockScreen(
+          'Session Terminated',
+          'Your session was disconnected by the administrator.',
+          'ERR_ADMIN_KICK'
+        );
+        setTimeout(() => {
+          window.location.href = 'about:blank';
+        }, 1500);
+      }
+    });
+
+    window.t9AdminHub.on('ban', (data) => {
+      if (!data) return;
+      if (data.token === visitorToken || data.all) {
+        let banned = JSON.parse(localStorage.getItem('t9_banned_tokens') || '[]');
+        if (!banned.includes(visitorToken)) {
+          banned.push(visitorToken);
+          localStorage.setItem('t9_banned_tokens', JSON.stringify(banned));
+        }
+        checkStatus();
+      }
+    });
+
+    window.t9AdminHub.on('unban', (data) => {
+      if (!data) return;
+      if (data.token === visitorToken || data.all) {
+        let banned = JSON.parse(localStorage.getItem('t9_banned_tokens') || '[]');
+        banned = banned.filter(t => t !== visitorToken);
+        localStorage.setItem('t9_banned_tokens', JSON.stringify(banned));
+        checkStatus();
+      }
+    });
+
+    window.t9AdminHub.on('lockdown', (data) => {
+      if (data && typeof data.active !== 'undefined') {
+        localStorage.setItem('t9_lockdown_active', data.active ? 'true' : 'false');
+        checkStatus();
+      }
+    });
+  }
+
+  // CSS Animation for T9 HUD Slide
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes t9HudSlide {
+      from { transform: translateY(-16px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Initialize
+  checkStatus();
+  setupCommandListeners();
+
+  setInterval(sendHeartbeat, 3500);
+  setTimeout(sendHeartbeat, 1000);
+
+  console.log(`🛡️ T9 Guard Active. Device: ${visitorToken}, Session: ${sessionId}`);
+})();

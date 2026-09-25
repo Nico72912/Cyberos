@@ -1,0 +1,170 @@
+/**
+ * T9 OS Cloud & Network Hub (Zero-Setup Global Cloud Sync)
+ * 
+ * Uses MQTT over secure WebSockets (WSS) via high-speed public brokers (EMQX / HiveMQ).
+ * Works across ALL computers, Chromebooks, and phones at school INSTANTLY with NO setup,
+ * NO accounts, and NO API keys required!
+ */
+
+window.T9_ADMIN_CONFIG = {
+  // Global cloud channel topic (unique to your site)
+  cloudChannel: "t9_os_htegos_prod_net",
+  
+  // High-reliability public brokers
+  brokers: [
+    { host: "broker.emqx.io", port: 8084, path: "/mqtt" },
+    { host: "broker.hivemq.com", port: 8884, path: "/mqtt" }
+  ],
+
+  // Default Admin Credentials
+  defaultAdmin: {
+    username: "ht",
+    passwordHash: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
+  },
+
+  presets: {
+    schoolBlockTitle: "Access Restricted",
+    schoolBlockMessage: "This web application has been blocked by your network administrator pursuant to educational content filter policies.",
+    schoolBlockCode: "ERR_CONNECTION_FILTERED_CATEGORY_GAMES"
+  }
+};
+
+class UniversalAdminHub {
+  constructor() {
+    this.localChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("t9_admin_bus") : null;
+    this.listeners = {};
+    this.mqttClient = null;
+    this.isConnected = false;
+    this.activeBrokerIndex = 0;
+    this.clientId = "t9_" + Math.random().toString(36).substring(2, 9) + "_" + Date.now().toString(36).substring(4);
+    
+    // Listen to local BroadcastChannel if available
+    if (this.localChannel) {
+      this.localChannel.onmessage = (event) => {
+        const { type, data } = event.data || {};
+        this._trigger(type, data);
+      };
+    }
+
+    // Initialize Cloud WebSocket Connection
+    this._loadMqttLibrary(() => {
+      this._connectMqtt();
+    });
+  }
+
+  _loadMqttLibrary(callback) {
+    if (window.Paho && window.Paho.MQTT) {
+      return callback();
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js";
+    script.onload = () => callback();
+    script.onerror = () => {
+      console.warn("Could not load Paho MQTT CDN. Operating in local multi-tab mode.");
+    };
+    document.head.appendChild(script);
+  }
+
+  _connectMqtt() {
+    if (!window.Paho || !window.Paho.MQTT) return;
+
+    const broker = window.T9_ADMIN_CONFIG.brokers[this.activeBrokerIndex];
+    try {
+      this.mqttClient = new Paho.MQTT.Client(broker.host, broker.port, broker.path || "/mqtt", this.clientId);
+
+      this.mqttClient.onConnectionLost = (responseObject) => {
+        this.isConnected = false;
+        if (responseObject.errorCode !== 0) {
+          console.warn("T9 Cloud Hub Disconnected:", responseObject.errorMessage);
+          // Try next broker after 3s
+          setTimeout(() => {
+            this.activeBrokerIndex = (this.activeBrokerIndex + 1) % window.T9_ADMIN_CONFIG.brokers.length;
+            this._connectMqtt();
+          }, 3000);
+        }
+      };
+
+      this.mqttClient.onMessageArrived = (message) => {
+        try {
+          const payload = JSON.parse(message.payloadString);
+          if (payload && payload.type) {
+            // Ignore messages sent by ourselves
+            if (payload.senderId !== this.clientId) {
+              this._trigger(payload.type, payload.data);
+            }
+          }
+        } catch (e) {
+          // ignore malformed
+        }
+      };
+
+      this.mqttClient.connect({
+        useSSL: true,
+        timeout: 5,
+        keepAliveInterval: 30,
+        cleanSession: true,
+        onSuccess: () => {
+          this.isConnected = true;
+          console.log(`🌐 T9 Cloud Hub connected to ${broker.host}! Global live sync active.`);
+          
+          // Subscribe to command and presence topics
+          const root = window.T9_ADMIN_CONFIG.cloudChannel;
+          this.mqttClient.subscribe(`${root}/#`);
+
+          if (this.onConnectHandler) {
+            this.onConnectHandler();
+          }
+        },
+        onFailure: (err) => {
+          console.warn(`Connection failed to ${broker.host}:`, err);
+          // Failover to next broker
+          this.activeBrokerIndex = (this.activeBrokerIndex + 1) % window.T9_ADMIN_CONFIG.brokers.length;
+          setTimeout(() => this._connectMqtt(), 2000);
+        }
+      });
+    } catch (err) {
+      console.warn("MQTT setup error:", err);
+    }
+  }
+
+  on(type, callback) {
+    if (!this.listeners[type]) this.listeners[type] = [];
+    this.listeners[type].push(callback);
+  }
+
+  _trigger(type, data) {
+    if (this.listeners[type]) {
+      this.listeners[type].forEach(fn => {
+        try { fn(data); } catch (e) { console.error(e); }
+      });
+    }
+  }
+
+  broadcast(type, data) {
+    const payload = {
+      type,
+      data,
+      senderId: this.clientId,
+      timestamp: Date.now()
+    };
+
+    // 1. Send via local BroadcastChannel
+    if (this.localChannel) {
+      try { this.localChannel.postMessage(payload); } catch (e) {}
+    }
+
+    // 2. Send via Cloud MQTT (to all computers globally)
+    if (this.isConnected && this.mqttClient) {
+      try {
+        const root = window.T9_ADMIN_CONFIG.cloudChannel;
+        const msg = new Paho.MQTT.Message(JSON.stringify(payload));
+        msg.destinationName = `${root}/${type}`;
+        this.mqttClient.send(msg);
+      } catch (err) {
+        console.warn("Cloud broadcast error:", err);
+      }
+    }
+  }
+}
+
+window.t9AdminHub = new UniversalAdminHub();
